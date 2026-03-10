@@ -1,6 +1,10 @@
-<p align="center">
-  <img src="assets/gratttool_logo.png" alt="gratttool logo" width="400">
-</p>
+<table width="100%" bgcolor="black" border="0" cellspacing="0" cellpadding="20">
+  <tr>
+    <td align="center">
+      <img src="assets/gratttool_logo.png" alt="gratttool logo" width="400">
+    </td>
+  </tr>
+</table>
 
 # gratttool
 
