@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/gratttool_logo.png" alt="gratttool logo" width="400">
+</p>
+
 # gratttool
 
 A full-featured Rust reimplementation of the deprecated BlueZ `gatttool` utility for interacting with Bluetooth Low Energy (BLE) devices via GATT (Generic Attribute Profile).
