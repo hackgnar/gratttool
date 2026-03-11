@@ -6,6 +6,8 @@
   </tr>
 </table>
 
+# WARNING - This is an ALPHA release. There are still many bugs and full testing has yet to be completed - WARNING
+
 # gratttool
 
 A full-featured Rust reimplementation of the deprecated BlueZ `gatttool` utility for interacting with Bluetooth Low Energy (BLE) devices via GATT (Generic Attribute Profile).
