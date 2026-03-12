@@ -97,8 +97,8 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "mtu",
-        params: "<value>",
-        desc: "Exchange MTU for GATT/ATT",
+        params: "[value | show]",
+        desc: "Display/set MTU for GATT/ATT",
     },
 ];
 
@@ -147,8 +147,6 @@ pub async fn run(
     let mut opt_dst_type: String = addr_type.to_string();
     let mut opt_sec_level: String = sec_level.to_string();
     let adapter = adapter_name.to_string();
-    let mut opt_mtu: u16 = 0;
-
     let prompt = get_prompt(state, opt_dst.as_deref(), psm);
     let (mut rl, mut stdout) = Readline::new(prompt)
         .map_err(|e| GrattError::Io(std::io::Error::other(e.to_string())))?;
@@ -269,7 +267,6 @@ pub async fn run(
                                 conn = None;
                                 notification_streams.clear();
                                 state = State::Disconnected;
-                                opt_mtu = 0;
                                 rl.update_prompt(&get_prompt(state, opt_dst.as_deref(), psm)).ok();
                             }
                             "primary" => {
@@ -568,36 +565,57 @@ pub async fn run(
                                 }
                             }
                             "mtu" => {
-                                if state != State::Connected {
-                                    writeln!(stdout, "{}", "Command Failed: Disconnected".red()).ok();
-                                    continue;
-                                }
-
-                                if psm != 0 {
-                                    writeln!(stdout, "{}", "Command Failed: Operation is only available for LE transport.".red()).ok();
-                                    continue;
-                                }
-
                                 if args.is_empty() {
-                                    writeln!(stdout, "Usage: mtu <value>").ok();
-                                    continue;
-                                }
-
-                                if opt_mtu != 0 {
-                                    writeln!(stdout, "{}", "Command Failed: MTU exchange can only occur once per connection.".red()).ok();
-                                    continue;
-                                }
-
-                                let mtu_val: u16 = match args[0].parse() {
-                                    Ok(v) if v >= 23 => v,
-                                    _ => {
-                                        writeln!(stdout, "{}", "Error: Invalid value. Minimum MTU size is 23".red()).ok();
+                                    // No argument: show current negotiated MTU (requires connection)
+                                    if state != State::Connected {
+                                        writeln!(stdout, "{}", "Command Failed: Disconnected".red()).ok();
                                         continue;
                                     }
-                                };
-
-                                opt_mtu = mtu_val;
-                                writeln!(stdout, "MTU was exchanged successfully: {}", mtu_val).ok();
+                                    if psm != 0 {
+                                        writeln!(stdout, "{}", "Command Failed: Operation is only available for LE transport.".red()).ok();
+                                        continue;
+                                    }
+                                    if let Some(ref c) = conn {
+                                        match gatt::get_mtu(c).await {
+                                            Ok(mtu_val) => {
+                                                writeln!(stdout, "MTU was exchanged successfully: {}", mtu_val).ok();
+                                            }
+                                            Err(e) => {
+                                                writeln!(stdout, "{}{}", "Error: ".red(), e).ok();
+                                            }
+                                        }
+                                    }
+                                } else if args[0].eq_ignore_ascii_case("show") {
+                                    // Show configured ExchangeMTU from BlueZ config
+                                    match connection::get_exchange_mtu_config() {
+                                        Ok(val) => {
+                                            writeln!(stdout, "ExchangeMTU = {} (from /etc/bluetooth/main.conf)", val).ok();
+                                        }
+                                        Err(e) => {
+                                            writeln!(stdout, "{}{}", "Error: ".red(), e).ok();
+                                        }
+                                    }
+                                } else {
+                                    // Set ExchangeMTU in BlueZ config
+                                    let mtu_val: u16 = match args[0].parse() {
+                                        Ok(v) if (23..=517).contains(&v) => v,
+                                        _ => {
+                                            writeln!(stdout, "{}", "Error: MTU must be between 23 and 517".red()).ok();
+                                            continue;
+                                        }
+                                    };
+                                    match connection::set_exchange_mtu_config(mtu_val) {
+                                        Ok(()) => {
+                                            writeln!(stdout, "ExchangeMTU set to {}. Reconnect for it to take effect.", mtu_val).ok();
+                                            if mtu_val != 517 {
+                                                writeln!(stdout, "Remember to reset back to 517 when done: mtu 517").ok();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            writeln!(stdout, "{}{}", "Error: ".red(), e).ok();
+                                        }
+                                    }
+                                }
                             }
                             _ => {
                                 writeln!(stdout, "{}{}: command not found", "Error: ".red(), cmd).ok();

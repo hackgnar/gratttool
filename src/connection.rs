@@ -3,6 +3,95 @@ use bluer::{Adapter, Address, AddressType, Device, Session};
 use crate::error::GrattError;
 use crate::handle_table::HandleTable;
 
+const BLUEZ_MAIN_CONF: &str = "/etc/bluetooth/main.conf";
+
+/// Read the current ExchangeMTU value from BlueZ config.
+/// Returns 517 (the default) if not explicitly set.
+pub fn get_exchange_mtu_config() -> Result<u16, GrattError> {
+    let content = std::fs::read_to_string(BLUEZ_MAIN_CONF)?;
+    let mut in_gatt = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_gatt = trimmed == "[GATT]";
+        }
+        if in_gatt && !trimmed.starts_with('#') && trimmed.starts_with("ExchangeMTU") {
+            if let Some(val) = trimmed.split('=').nth(1) {
+                return val
+                    .trim()
+                    .parse::<u16>()
+                    .map_err(|_| GrattError::InvalidValue("Invalid ExchangeMTU in config".into()));
+            }
+        }
+    }
+    Ok(517) // BlueZ default
+}
+
+/// Set the ExchangeMTU value in /etc/bluetooth/main.conf and restart bluetoothd.
+/// Requires root. Value must be 23–517.
+pub fn set_exchange_mtu_config(value: u16) -> Result<(), GrattError> {
+    if value < 23 || value > 517 {
+        return Err(GrattError::InvalidValue(
+            "MTU must be between 23 and 517".into(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(BLUEZ_MAIN_CONF)?;
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let new_line = format!("ExchangeMTU = {}", value);
+
+    let mut found = false;
+    let mut in_gatt = false;
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_gatt = trimmed == "[GATT]";
+        }
+        if in_gatt
+            && (trimmed.starts_with("ExchangeMTU") || trimmed.starts_with("#ExchangeMTU"))
+        {
+            *line = new_line.clone();
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        // Find [GATT] section and insert after it
+        let mut insert_idx = None;
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() == "[GATT]" {
+                insert_idx = Some(i + 1);
+                break;
+            }
+        }
+        if let Some(idx) = insert_idx {
+            lines.insert(idx, new_line);
+        } else {
+            // No [GATT] section — add one
+            lines.push(String::new());
+            lines.push("[GATT]".to_string());
+            lines.push(new_line);
+        }
+    }
+
+    // Preserve trailing newline
+    let new_content = lines.join("\n") + "\n";
+    std::fs::write(BLUEZ_MAIN_CONF, new_content)?;
+
+    // Restart bluetoothd so it picks up the new value
+    let status = std::process::Command::new("systemctl")
+        .args(["restart", "bluetooth"])
+        .status()?;
+    if !status.success() {
+        return Err(GrattError::Adapter(
+            "Failed to restart bluetooth service".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Active BLE connection state
 #[allow(dead_code)]
 pub struct Connection {
@@ -14,7 +103,6 @@ pub struct Connection {
     pub addr_type: AddressType,
     pub sec_level: String,
     pub psm: u16,
-    pub mtu_exchanged: bool,
 }
 
 /// Parse adapter name like "hci0" to extract the index, or treat as-is for bluer
@@ -80,7 +168,6 @@ pub async fn connect(
         addr_type,
         sec_level: sec_level.to_string(),
         psm,
-        mtu_exchanged: false,
     })
 }
 

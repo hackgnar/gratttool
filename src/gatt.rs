@@ -247,17 +247,21 @@ pub async fn write_request(
     Ok(())
 }
 
-/// Listen for notifications and indications on all handles
-pub async fn listen(conn: &Connection, mode: OutputMode) -> Result<(), GrattError> {
+/// Type alias for the combined notification stream
+pub type NotifyStream = futures::stream::SelectAll<
+    Pin<Box<dyn futures::Stream<Item = (u16, bool, Vec<u8>)> + Send>>,
+>;
+
+/// Subscribe to all notifiable characteristics. Returns a combined stream
+/// that yields (handle, is_indication, data) tuples. Call this BEFORE any
+/// write operation so that notifications triggered by the write are not missed.
+pub async fn subscribe_notifications(conn: &Connection) -> Result<Option<NotifyStream>, GrattError> {
     let notifiable = conn.handle_table.notifiable_characteristics();
 
     if notifiable.is_empty() {
-        eprintln!("No characteristics with notify/indicate found, waiting...");
-        tokio::signal::ctrl_c().await.ok();
-        return Ok(());
+        return Ok(None);
     }
 
-    // Subscribe to all notifiable characteristics, box-pinning each stream
     let mut boxed_streams: Vec<Pin<Box<dyn futures::Stream<Item = (u16, bool, Vec<u8>)> + Send>>> =
         Vec::new();
     for obj in &notifiable {
@@ -282,12 +286,25 @@ pub async fn listen(conn: &Connection, mode: OutputMode) -> Result<(), GrattErro
     }
 
     if boxed_streams.is_empty() {
-        eprintln!("Could not subscribe to any notifications, waiting...");
-        tokio::signal::ctrl_c().await.ok();
-        return Ok(());
+        return Ok(None);
     }
 
-    let mut combined = futures::stream::select_all(boxed_streams);
+    Ok(Some(futures::stream::select_all(boxed_streams)))
+}
+
+/// Wait for notifications/indications on an already-subscribed stream until Ctrl-C.
+pub async fn listen_on_stream(
+    stream: Option<NotifyStream>,
+    mode: OutputMode,
+) -> Result<(), GrattError> {
+    let mut combined = match stream {
+        Some(s) => s,
+        None => {
+            eprintln!("No characteristics with notify/indicate found, waiting...");
+            tokio::signal::ctrl_c().await.ok();
+            return Ok(());
+        }
+    };
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
@@ -309,6 +326,13 @@ pub async fn listen(conn: &Connection, mode: OutputMode) -> Result<(), GrattErro
     }
 
     Ok(())
+}
+
+/// Listen for notifications and indications on all handles (subscribe + wait).
+/// Used when --listen is the only operation (no prior write to race with).
+pub async fn listen(conn: &Connection, mode: OutputMode) -> Result<(), GrattError> {
+    let stream = subscribe_notifications(conn).await?;
+    listen_on_stream(stream, mode).await
 }
 
 /// Enumerate all services, characteristics, descriptors and values in a table
@@ -509,6 +533,20 @@ async fn collect_device_info(conn: &Connection) -> Vec<(String, String)> {
     }
 
     info
+}
+
+/// Query the negotiated ATT MTU from the first available characteristic.
+/// BlueZ auto-negotiates MTU during connection; this reads the result.
+pub async fn get_mtu(conn: &Connection) -> Result<usize, GrattError> {
+    // Find the first characteristic and query its MTU property
+    for obj in conn.handle_table.entries.values() {
+        if let GattObject::Characteristic { characteristic, .. } = obj {
+            return characteristic.mtu().await.map_err(|e| {
+                GrattError::Gatt(format!("Failed to read MTU: {}", e))
+            });
+        }
+    }
+    Err(GrattError::Gatt("No characteristics available to query MTU".into()))
 }
 
 // --- Interactive mode variants (same logic, different output format) ---

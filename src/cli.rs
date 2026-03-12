@@ -6,8 +6,9 @@ pub fn parse_handle(s: &str) -> Result<u16, String> {
     u16::from_str_radix(s, 16).map_err(|e| format!("Invalid handle '{}': {}", s, e))
 }
 
-/// Parse a hex byte string like "0102ff" into Vec<u8>
+/// Parse a hex byte string like "0102ff" or "0x0102ff" into Vec<u8>
 pub fn parse_hex_value(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     hex::decode(s).map_err(|e| format!("Invalid value '{}': {}", s, e))
 }
 
@@ -26,9 +27,9 @@ pub struct Cli {
     #[arg(short = 't', long = "addr-type", default_value = "public")]
     pub addr_type: String,
 
-    /// Specify the MTU size
-    #[arg(short = 'm', long = "mtu", default_value_t = 0)]
-    pub mtu: u16,
+    /// Set BlueZ ExchangeMTU (23-517), or "show" to display current value [requires root to set]
+    #[arg(short = 'm', long = "mtu")]
+    pub mtu: Option<String>,
 
     /// Specify the PSM for GATT/ATT over BR/EDR
     #[arg(short = 'p', long = "psm", default_value_t = 0)]
@@ -91,8 +92,8 @@ pub struct Cli {
     pub handle: Option<u16>,
 
     /// Write characteristic value (hex bytes, e.g. 0102ff)
-    #[arg(short = 'n', long = "value", value_parser = parse_hex_value)]
-    pub value: Option<Vec<u8>>,
+    #[arg(short = 'n', long = "value", num_args = 1.., trailing_var_arg = false)]
+    pub value: Option<Vec<String>>,
 
     // --- gratttool-enhanced flags (not in original gatttool) ---
 
@@ -107,6 +108,18 @@ pub struct Cli {
     /// Write an ASCII string value (alternative to -n hex)
     #[arg(short = 'S', long = "string", conflicts_with = "value", help_heading = "gratttool Enhanced Features")]
     pub string: Option<String>,
+
+    /// Change adapter BD_ADDR (MAC address), or "show" to display current address [requires root]
+    #[arg(long = "bdaddr", help_heading = "gratttool Enhanced Features")]
+    pub bdaddr: Option<String>,
+
+    /// Don't reset adapter after BD_ADDR change
+    #[arg(long = "bdaddr-no-reset", requires = "bdaddr", help_heading = "gratttool Enhanced Features")]
+    pub bdaddr_no_reset: bool,
+
+    /// CSR only: use transient mode (address lost on power cycle)
+    #[arg(long = "bdaddr-transient", requires = "bdaddr", help_heading = "gratttool Enhanced Features")]
+    pub bdaddr_transient: bool,
 }
 
 impl Cli {
@@ -131,12 +144,17 @@ impl Cli {
         }
     }
 
-    /// Return the write value from either -n (hex) or -S (string) flags
-    pub fn effective_value(&self) -> Option<Vec<u8>> {
+    /// Return the write value from either -n (hex) or -S (string) flags.
+    /// For -n, multiple arguments and whitespace are concatenated to handle
+    /// shell-expanded `xxd -ps` output that wraps at 60 hex characters.
+    pub fn effective_value(&self) -> Option<Result<Vec<u8>, String>> {
         if let Some(ref s) = self.string {
-            Some(s.as_bytes().to_vec())
+            Some(Ok(s.as_bytes().to_vec()))
         } else {
-            self.value.clone()
+            self.value.as_ref().map(|parts| {
+                let combined: String = parts.concat();
+                parse_hex_value(&combined)
+            })
         }
     }
 }

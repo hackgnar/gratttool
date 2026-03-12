@@ -60,7 +60,7 @@ The binary is at `./target/release/gratttool`.
 | `-i` | `--adapter` | Local adapter interface | `hci0` |
 | `-b` | `--device` | Remote device MAC address | (required for non-interactive) |
 | `-t` | `--addr-type` | Address type: `public` or `random` | `public` |
-| `-m` | `--mtu` | MTU size (0 = auto) | `0` |
+| `-m` | `--mtu` | Set BlueZ ExchangeMTU (23-517), or `show` | |
 | `-p` | `--psm` | PSM for GATT/ATT over BR/EDR (0 = LE) | `0` |
 | `-l` | `--sec-level` | Security level: `low`, `medium`, or `high` | `low` |
 
@@ -97,6 +97,9 @@ These flags are **not available in the original gatttool** — they are gratttoo
 | `-A` | `--ascii` | bool | Output read/notification values as ASCII (`.` for non-printable) |
 | `-X` | `--hex-ascii` | bool | Output read/notification values as hex AND ASCII side-by-side |
 | `-S` | `--string` | `<TEXT>` | Write an ASCII string value (alternative to `-n` hex) |
+| | `--bdaddr` | `<ADDR>\|show` | Change adapter BD_ADDR (MAC), or `show` current address |
+| | `--bdaddr-no-reset` | bool | Don't reset adapter after BD_ADDR change |
+| | `--bdaddr-transient` | bool | CSR only: transient mode (address lost on power cycle) |
 
 **Conflicts:** `-A` and `-X` are mutually exclusive. `-S` and `-n` are mutually exclusive.
 
@@ -141,6 +144,86 @@ gratttool -b AA:BB:CC:DD:EE:FF --char-write-req -a 0x002c -n $(echo -n "flag_val
 # After:
 gratttool -b AA:BB:CC:DD:EE:FF --char-write-req -a 0x002c -S "flag_value"
 ```
+
+#### `-m` / `--mtu` (ATT MTU configuration)
+
+gratttool uses the BlueZ D-Bus API, which auto-negotiates the ATT MTU during connection. Unlike the original gatttool (which used raw ATT sockets), there is no per-connection MTU exchange call. Instead, gratttool modifies the system-wide BlueZ `ExchangeMTU` setting in `/etc/bluetooth/main.conf` and restarts the Bluetooth service.
+
+```bash
+# Show current configured ExchangeMTU value
+gratttool -m show
+# ExchangeMTU = 517 (from /etc/bluetooth/main.conf)
+
+# Set MTU to a specific value (requires root)
+sudo gratttool -m 444
+# ExchangeMTU set to 444. Takes effect on next BLE connection.
+
+# Now connect — BlueZ will request MTU 444 during ATT exchange
+sudo gratttool -b AA:BB:CC:DD:EE:FF --char-read -a 0x0003
+```
+
+In interactive mode, `mtu` with no arguments displays the actual negotiated MTU for the current connection, and `mtu <value>` updates the BlueZ config:
+
+```
+[AA:BB:CC:DD:EE:FF][LE]> mtu
+MTU was exchanged successfully: 517
+[AA:BB:CC:DD:EE:FF][LE]> mtu 444
+ExchangeMTU set to 444. Reconnect for it to take effect.
+[AA:BB:CC:DD:EE:FF][LE]> mtu show
+ExchangeMTU = 444 (from /etc/bluetooth/main.conf)
+```
+
+**Important caveats:**
+
+- **Requires root** to modify `/etc/bluetooth/main.conf` and restart `bluetoothd`
+- **System-wide setting** — affects all Bluetooth connections on the machine, not just gratttool
+- **Does not affect the current connection** — only takes effect on the next BLE connection (disconnect and reconnect)
+- The actual negotiated MTU is `min(your value, remote device's supported MTU)` — you cannot force a higher MTU than the peripheral supports
+- The BLE spec range is **23–517**; the default of 517 is the maximum
+
+**Always reset MTU back to 517 when done testing.** Leaving a low MTU configured will degrade performance for all Bluetooth applications on the system (file transfers, audio streaming, other BLE tools, etc.):
+
+```bash
+sudo gratttool -m 517
+```
+
+#### `--bdaddr` (MAC address spoofing)
+
+A pure Rust reimplementation of the deprecated BlueZ `bdaddr` tool. Changes the Bluetooth adapter's hardware address (BD_ADDR) using vendor-specific HCI commands.
+
+```bash
+# Show current adapter address and manufacturer
+sudo gratttool --bdaddr show
+# Manufacturer:  Broadcom (15)
+# Device address: AA:BB:CC:DD:EE:FF
+
+# Change address (resets adapter automatically)
+sudo gratttool --bdaddr 00:11:22:33:44:55
+
+# Change on a specific adapter
+sudo gratttool -i hci1 --bdaddr 00:11:22:33:44:55
+
+# CSR transient mode (lost on power cycle)
+sudo gratttool --bdaddr 00:11:22:33:44:55 --bdaddr-transient
+
+# Skip adapter reset after change
+sudo gratttool --bdaddr 00:11:22:33:44:55 --bdaddr-no-reset
+```
+
+**Requires root.**
+
+**Supported chipsets:** Ericsson, Cambridge Silicon Radio (CSR), Texas Instruments, Broadcom, Zeevo, ST Microelectronics, Intel, and Cypress. The manufacturer is auto-detected via the BlueZ Management API — if your chipset is not in this list, the command will report it as unsupported.
+
+**How it works:**
+
+Modern Linux kernels (5.x+) restrict raw HCI sockets to vendor-specific commands only (OGF 0x3F), blocking standard HCI commands like `Read_Local_Version`. gratttool works around this by using two separate socket channels:
+
+1. **BlueZ Management API** (`HCI_CHANNEL_CONTROL`) — reads controller info (manufacturer ID and current address). This channel is not restricted by the kernel.
+2. **Raw HCI socket** (`HCI_CHANNEL_RAW`) — sends the vendor-specific write command to flash the new address. These commands use OGF 0x3F so they pass the kernel's restriction.
+
+Vendor write commands are **fire-and-forget** — the command is sent but the response is not read, because modern kernels do not reliably deliver command-complete events to userspace raw sockets. The adapter is then reset via ioctl (`HCIDEVRESET`) to apply the change, unless `--bdaddr-no-reset` is specified.
+
+**Persistence:** The address change persists across `bluetoothd` restarts but is typically lost on a full power cycle (depends on chipset and whether the vendor command writes to persistent storage). CSR `--bdaddr-transient` mode is always lost on power cycle by design.
 
 ## Non-Interactive Mode
 
@@ -333,7 +416,7 @@ The prompt shows the connection state and transport type:
 | `char-write-req` | `<handle> <value>` | Write with response |
 | `char-write-cmd` | `<handle> <value>` | Write without response |
 | `sec-level` | `[low\|medium\|high]` | Get or set security level |
-| `mtu` | `<value>` | Exchange MTU |
+| `mtu` | `[value \| show]` | Display negotiated MTU, or set BlueZ ExchangeMTU |
 
 ### Interactive Session Example
 
@@ -354,8 +437,8 @@ Characteristic value/descriptor: 48 65 6c 6c 6f
 Characteristic value was written successfully
 [AA:BB:CC:DD:EE:FF][LE]> sec-level
 sec-level: low
-[AA:BB:CC:DD:EE:FF][LE]> mtu 200
-MTU was exchanged successfully: 200
+[AA:BB:CC:DD:EE:FF][LE]> mtu
+MTU was exchanged successfully: 517
 [AA:BB:CC:DD:EE:FF][LE]> disconnect
 [                 ][LE]> quit
 ```
@@ -392,12 +475,13 @@ handle: 0x000a, uuid: 00002902-...
 src/
   main.rs           Entry point, argument parsing, mode dispatch
   cli.rs            Clap argument definitions (matches gatttool syntax)
-  connection.rs     BLE connection management via bluer
+  connection.rs     BLE connection management via bluer + MTU config
   handle_table.rs   ATT handle-to-bluer-object mapping table
   gatt.rs           GATT operations (discover, read, write, notify)
   interactive.rs    Interactive readline shell with async notifications
   output.rs         Output formatting (gatttool formats + Catppuccin enumerate table)
   error.rs          ATT error codes and application error types
+  bdaddr.rs         BD_ADDR change via vendor-specific HCI commands
 ```
 
 ### Handle Mapping
