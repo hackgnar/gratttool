@@ -6,13 +6,13 @@
   </tr>
 </table>
 
-# WARNING - This is an ALPHA release. There are still many bugs and full testing has yet to be completed - WARNING
-
 # gratttool
 
 A full-featured Rust reimplementation of the deprecated BlueZ `gatttool` utility for interacting with Bluetooth Low Energy (BLE) devices via GATT (Generic Attribute Profile).
 
 gratttool provides the same CLI argument syntax, input parsing, and output formatting as the original gatttool, while using the modern [bluer](https://crates.io/crates/bluer) crate (official BlueZ D-Bus Rust bindings) instead of raw HCI/ATT sockets.
+
+gratttool has been end-to-end tested against [BLE CTF](https://github.com/hackgnar/ble_ctf) and has full feature parity with the original gatttool, plus added enhancements for modern BLE workflows.
 
 ## Why gratttool?
 
@@ -22,7 +22,7 @@ The original `gatttool` was removed from BlueZ in 2017 but remains one of the mo
 - Uses the **modern BlueZ D-Bus API** instead of deprecated raw sockets
 - Is written in **safe Rust** with no C dependencies beyond libdbus
 - Supports both **non-interactive** (one-shot) and **interactive** (shell) modes
-- Adds a **`--enumerate` table view** (inspired by [bleah](https://github.com/evilsocket/bleah)) with Catppuccin-themed colors for at-a-glance device exploration
+- Adds enhanced features: **`--enumerate` table view**, **`--bdaddr` MAC spoofing**, **`--mtu` configuration**, **ASCII string writes**, and **hidden notification capture**
 
 ## Building
 
