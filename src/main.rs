@@ -5,6 +5,7 @@ mod error;
 mod gatt;
 mod handle_table;
 mod interactive;
+mod monitor;
 mod output;
 
 use clap::Parser;
@@ -136,8 +137,23 @@ async fn main() {
         }
     };
 
-    // If --listen is combined with another operation, subscribe to notifications
-    // BEFORE running the operation so we don't miss notifications triggered by it.
+    // If --listen is set, start the HCI monitor socket BEFORE subscribing
+    // or writing so we catch notifications that D-Bus can't deliver (e.g.,
+    // characteristics without the NOTIFY property bit).
+    let monitor_rx = if args.listen {
+        match monitor::open(&args.adapter) {
+            Ok(rx) => Some(rx),
+            Err(e) => {
+                eprintln!("Note: HCI monitor unavailable ({}). Run as root to catch notifications on non-NOTIFY characteristics.", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // If --listen is combined with another operation, subscribe to D-Bus
+    // notifications BEFORE running the operation.
     let notify_stream = if args.listen && args.has_operation() {
         match gatt::subscribe_notifications(&conn).await {
             Ok(stream) => stream,
@@ -157,16 +173,22 @@ async fn main() {
         eprintln!("{}", e);
     }
 
-    // If --listen is set, wait for notifications
+    // If --listen is set, wait for notifications from both D-Bus and monitor
     if args.listen {
         if args.has_operation() {
-            // We already subscribed above; just wait on the stream
-            if let Err(e) = gatt::listen_on_stream(notify_stream, args.output_mode()).await {
+            if let Err(e) = gatt::listen_combined(notify_stream, monitor_rx, args.output_mode()).await {
                 eprintln!("{}", e);
             }
         } else {
-            // --listen alone: subscribe and wait
-            if let Err(e) = gatt::listen(&conn, args.output_mode()).await {
+            // --listen alone: subscribe via D-Bus and also use monitor
+            let stream = match gatt::subscribe_notifications(&conn).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    None
+                }
+            };
+            if let Err(e) = gatt::listen_combined(stream, monitor_rx, args.output_mode()).await {
                 eprintln!("{}", e);
             }
         }

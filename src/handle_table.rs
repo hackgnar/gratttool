@@ -265,18 +265,13 @@ impl HandleTable {
             .collect()
     }
 
-    /// Find all characteristics that support notification or indication
-    pub fn notifiable_characteristics(&self) -> Vec<&GattObject> {
+    /// Return all characteristics for notification subscription.
+    /// Includes characteristics without NOTIFY/INDICATE property bits —
+    /// some devices send unsolicited notifications regardless.
+    pub fn all_characteristics(&self) -> Vec<&GattObject> {
         self.entries
             .values()
-            .filter(|obj| {
-                if let GattObject::Characteristic { properties, .. } = obj {
-                    (properties.0 & CharProps::NOTIFY) != 0
-                        || (properties.0 & CharProps::INDICATE) != 0
-                } else {
-                    false
-                }
-            })
+            .filter(|obj| matches!(obj, GattObject::Characteristic { .. }))
             .collect()
     }
 }

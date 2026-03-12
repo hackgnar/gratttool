@@ -315,6 +315,14 @@ gratttool -b AA:BB:CC:DD:EE:FF --listen
 gratttool -b AA:BB:CC:DD:EE:FF --char-write-req -a 0x000f -n 0100 --listen
 ```
 
+**Hidden notifications (requires root):** Some devices (particularly BLE CTF challenges) send notifications on characteristics that don't advertise the NOTIFY property bit. BlueZ's D-Bus API silently drops these. When run as root, gratttool opens an HCI monitor socket (the same kernel interface used by `btmon`) to passively capture ALL notification PDUs — including ones BlueZ would otherwise discard. If you expect a notification but aren't seeing output, try running with `sudo`:
+
+```bash
+sudo gratttool -b AA:BB:CC:DD:EE:FF --char-write-req -a 0x0052 -n 0x00 --listen
+```
+
+This only affects `--listen`. All other operations (read, write, discovery) work without root.
+
 ### Enumerate Device (Table View)
 
 Inspired by [bleah](https://github.com/hackgnar/bleah)'s `-e` flag, `--enumerate` connects to a device and displays a full overview of all services, characteristics, descriptors, and readable values in a color-coded table view using the [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) color palette.

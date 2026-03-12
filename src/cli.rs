@@ -67,7 +67,7 @@ pub struct Cli {
     #[arg(long = "char-desc")]
     pub char_desc: bool,
 
-    /// Listen for notifications and indications
+    /// Listen for notifications and indications (use sudo to catch hidden notifications)
     #[arg(long = "listen")]
     pub listen: bool,
 

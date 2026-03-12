@@ -224,9 +224,11 @@ pub async fn run(
                                     Ok(addr) => {
                                         match connection::connect(&adapter, addr, at, &opt_sec_level, psm).await {
                                             Ok(c) => {
-                                                // Subscribe to notifications
+                                                // Subscribe to notifications on all characteristics
+                                                // (not just those with NOTIFY bit — some devices
+                                                // send unsolicited notifications regardless)
                                                 notification_streams.clear();
-                                                for obj in c.handle_table.notifiable_characteristics() {
+                                                for obj in c.handle_table.all_characteristics() {
                                                     if let crate::handle_table::GattObject::Characteristic {
                                                         characteristic,
                                                         value_handle,

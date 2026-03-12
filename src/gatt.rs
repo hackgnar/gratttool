@@ -252,19 +252,20 @@ pub type NotifyStream = futures::stream::SelectAll<
     Pin<Box<dyn futures::Stream<Item = (u16, bool, Vec<u8>)> + Send>>,
 >;
 
-/// Subscribe to all notifiable characteristics. Returns a combined stream
-/// that yields (handle, is_indication, data) tuples. Call this BEFORE any
-/// write operation so that notifications triggered by the write are not missed.
+/// Subscribe to all characteristics for notifications. Tries every
+/// characteristic, not just those advertising NOTIFY/INDICATE — some devices
+/// (and CTF challenges) send notifications on handles that don't set those
+/// property bits. Failures are silently ignored.
 pub async fn subscribe_notifications(conn: &Connection) -> Result<Option<NotifyStream>, GrattError> {
-    let notifiable = conn.handle_table.notifiable_characteristics();
+    let all_chars = conn.handle_table.all_characteristics();
 
-    if notifiable.is_empty() {
+    if all_chars.is_empty() {
         return Ok(None);
     }
 
     let mut boxed_streams: Vec<Pin<Box<dyn futures::Stream<Item = (u16, bool, Vec<u8>)> + Send>>> =
         Vec::new();
-    for obj in &notifiable {
+    for obj in &all_chars {
         if let GattObject::Characteristic {
             characteristic,
             value_handle,
@@ -292,30 +293,64 @@ pub async fn subscribe_notifications(conn: &Connection) -> Result<Option<NotifyS
     Ok(Some(futures::stream::select_all(boxed_streams)))
 }
 
-/// Wait for notifications/indications on an already-subscribed stream until Ctrl-C.
-pub async fn listen_on_stream(
-    stream: Option<NotifyStream>,
+/// Listen for notifications from both the D-Bus stream and the HCI monitor
+/// socket.  The monitor catches notifications on characteristics that don't
+/// advertise NOTIFY/INDICATE (where BlueZ D-Bus drops the PDU).  Handles
+/// seen via D-Bus are tracked to avoid duplicates from the monitor.
+pub async fn listen_combined(
+    dbus_stream: Option<NotifyStream>,
+    monitor_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::monitor::NotificationEvent>>,
     mode: OutputMode,
 ) -> Result<(), GrattError> {
-    let mut combined = match stream {
-        Some(s) => s,
-        None => {
-            eprintln!("No characteristics with notify/indicate found, waiting...");
-            tokio::signal::ctrl_c().await.ok();
-            return Ok(());
-        }
-    };
+    use std::collections::HashSet;
+
+    let mut dbus = dbus_stream;
+    let mut monitor = monitor_rx;
+    // Track handles that delivered via D-Bus so we can deduplicate
+    let mut dbus_handles: HashSet<u16> = HashSet::new();
+
+    let has_any = dbus.is_some() || monitor.is_some();
+    if !has_any {
+        eprintln!("No characteristics with notify/indicate found, waiting...");
+        tokio::signal::ctrl_c().await.ok();
+        return Ok(());
+    }
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
     loop {
         tokio::select! {
-            Some((handle, is_indication, data)) = combined.next() => {
+            // D-Bus notification stream
+            Some((handle, is_indication, data)) = async {
+                match dbus.as_mut() {
+                    Some(s) => s.next().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                dbus_handles.insert(handle);
                 if is_indication {
                     println!("{}", output::fmt_indication(handle, &data, mode));
                 } else {
                     println!("{}", output::fmt_notification(handle, &data, mode));
+                }
+                std::io::stdout().flush().ok();
+            }
+            // HCI monitor (catches notifications D-Bus drops)
+            Some(evt) = async {
+                match monitor.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Skip if D-Bus already delivered this handle (avoid duplicates)
+                if dbus_handles.contains(&evt.handle) {
+                    continue;
+                }
+                if evt.is_indication {
+                    println!("{}", output::fmt_indication(evt.handle, &evt.value, mode));
+                } else {
+                    println!("{}", output::fmt_notification(evt.handle, &evt.value, mode));
                 }
                 std::io::stdout().flush().ok();
             }
@@ -326,13 +361,6 @@ pub async fn listen_on_stream(
     }
 
     Ok(())
-}
-
-/// Listen for notifications and indications on all handles (subscribe + wait).
-/// Used when --listen is the only operation (no prior write to race with).
-pub async fn listen(conn: &Connection, mode: OutputMode) -> Result<(), GrattError> {
-    let stream = subscribe_notifications(conn).await?;
-    listen_on_stream(stream, mode).await
 }
 
 /// Enumerate all services, characteristics, descriptors and values in a table
