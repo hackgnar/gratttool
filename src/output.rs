@@ -616,3 +616,147 @@ pub fn enum_separator_row() -> EnumRow {
         ascii: String::new(),
     }
 }
+
+// --- Scan results table output ---
+
+/// Render a scan results table with Catppuccin-styled box-drawing
+pub fn render_scan_table(devices: &[crate::scan::ScannedDevice]) -> String {
+    let tw = term_width();
+    let headers = ["Address", "Type", "RSSI", "Name"];
+    let ncols = headers.len();
+
+    // Measure column widths from content
+    let mut w: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    for dev in devices {
+        w[0] = w[0].max(17); // MAC address is always 17 chars
+        let type_str = format_addr_type(dev.addr_type);
+        w[1] = w[1].max(type_str.len());
+        let rssi_str = dev.rssi.map(|r| format!("{} dBm", r)).unwrap_or_else(|| "n/a".into());
+        w[2] = w[2].max(rssi_str.len());
+        let name = dev.name.as_deref().unwrap_or("");
+        w[3] = w[3].max(name.len());
+    }
+
+    // Cap name column to fit terminal
+    let overhead = ncols + 1 + ncols * 2; // borders + padding
+    let fixed = w[0] + w[1] + w[2] + overhead;
+    let max_name = tw.saturating_sub(fixed).max(headers[3].len()).max(8);
+    w[3] = w[3].min(max_name);
+
+    let mut out = String::new();
+    let b = ctp("─", SURFACE1);
+    let v = ctp("│", SURFACE1);
+
+    // Title
+    let title = format!(" {} ({} devices) ", ctp_bold("Scan Results", PEACH), devices.len());
+    let title_vis = visible_len(&title);
+
+    let total_inner: usize = w.iter().sum::<usize>() + (ncols - 1) * 3 + 2;
+
+    // Top border with title
+    out.push_str(&ctp("┌", SURFACE1).to_string());
+    out.push_str(&title);
+    let remaining = total_inner.saturating_sub(title_vis);
+    for _ in 0..remaining { out.push_str(&b.to_string()); }
+    out.push_str(&ctp("┐", SURFACE1).to_string());
+    out.push('\n');
+
+    // Header row
+    out.push_str(&v.to_string());
+    for (i, h) in headers.iter().enumerate() {
+        out.push(' ');
+        out.push_str(&ctp_bold(h, MAUVE).to_string());
+        out.push_str(&" ".repeat(w[i].saturating_sub(h.len())));
+        out.push(' ');
+        if i < ncols - 1 { out.push_str(&v.to_string()); }
+    }
+    out.push_str(&v.to_string());
+    out.push('\n');
+
+    // Header separator
+    out.push_str(&ctp("├", SURFACE1).to_string());
+    for (i, width) in w.iter().enumerate() {
+        for _ in 0..width + 2 { out.push_str(&b.to_string()); }
+        out.push_str(&(if i < ncols - 1 { ctp("┼", SURFACE1) } else { ctp("┤", SURFACE1) }).to_string());
+    }
+    out.push('\n');
+
+    // Sort devices by RSSI (strongest first), then by address
+    let mut sorted: Vec<&crate::scan::ScannedDevice> = devices.iter().collect();
+    sorted.sort_by(|a, b| {
+        b.rssi.unwrap_or(i16::MIN).cmp(&a.rssi.unwrap_or(i16::MIN))
+            .then_with(|| a.address.cmp(&b.address))
+    });
+
+    // Data rows
+    for dev in &sorted {
+        let addr_str = format!("{}", dev.address);
+        let type_str = format_addr_type(dev.addr_type);
+        let rssi_str = dev.rssi.map(|r| format!("{} dBm", r)).unwrap_or_else(|| "n/a".into());
+        let name = dev.name.as_deref().unwrap_or("");
+        // Truncate name if too long
+        let name_display = if name.len() > w[3] {
+            &name[..w[3]]
+        } else {
+            name
+        };
+
+        let fields: Vec<String> = vec![addr_str, type_str, rssi_str, name_display.to_string()];
+
+        out.push_str(&v.to_string());
+        for (i, field) in fields.iter().enumerate() {
+            out.push(' ');
+            let colored = match i {
+                0 => ctp_bold(field, ROSEWATER).to_string(),
+                1 => ctp(field, LAVENDER).to_string(),
+                2 => colorize_rssi(field, dev.rssi),
+                3 => {
+                    if field.is_empty() {
+                        ctp("(unknown)", OVERLAY0).to_string()
+                    } else {
+                        ctp_bold(field, YELLOW).to_string()
+                    }
+                }
+                _ => field.clone(),
+            };
+            let vlen = visible_len(&colored);
+            out.push_str(&colored);
+            out.push_str(&" ".repeat(w[i].saturating_sub(vlen)));
+            out.push(' ');
+            if i < ncols - 1 { out.push_str(&v.to_string()); }
+        }
+        out.push_str(&v.to_string());
+        out.push('\n');
+    }
+
+    // Bottom border
+    out.push_str(&ctp("└", SURFACE1).to_string());
+    for (i, width) in w.iter().enumerate() {
+        for _ in 0..width + 2 { out.push_str(&b.to_string()); }
+        out.push_str(&(if i < ncols - 1 { ctp("┴", SURFACE1) } else { ctp("┘", SURFACE1) }).to_string());
+    }
+    out.push('\n');
+
+    out
+}
+
+/// Format an address type for display
+fn format_addr_type(addr_type: Option<bluer::AddressType>) -> String {
+    match addr_type {
+        Some(bluer::AddressType::LePublic) => "public".to_string(),
+        Some(bluer::AddressType::LeRandom) => "random".to_string(),
+        Some(bluer::AddressType::BrEdr) => "BR/EDR".to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+/// Colorize RSSI value — green for strong, yellow for medium, red for weak
+fn colorize_rssi(s: &str, rssi: Option<i16>) -> String {
+    match rssi {
+        Some(r) if r >= -50 => ctp_bold(s, GREEN).to_string(),
+        Some(r) if r >= -70 => ctp(s, YELLOW).to_string(),
+        Some(r) if r >= -85 => ctp(s, PEACH).to_string(),
+        Some(_) => ctp(s, RED).to_string(),
+        None => ctp(s, OVERLAY0).to_string(),
+    }
+}

@@ -41,6 +41,11 @@ const COMMANDS: &[Command] = &[
         desc: "Exit interactive mode",
     },
     Command {
+        name: "scan",
+        params: "[duration in seconds]",
+        desc: "Scan for nearby BLE devices (default 10s)",
+    },
+    Command {
         name: "connect",
         params: "[address [address type]]",
         desc: "Connect to a remote device",
@@ -192,6 +197,30 @@ pub async fn run(
                                     connection::disconnect(&c.device).await.ok();
                                 }
                                 break;
+                            }
+                            "scan" => {
+                                let duration: u64 = if !args.is_empty() {
+                                    match args[0].parse() {
+                                        Ok(d) if d > 0 => d,
+                                        _ => {
+                                            writeln!(stdout, "{}", "Error: Invalid duration (must be a positive integer)".red()).ok();
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    10
+                                };
+
+                                match crate::scan::scan_interactive(&adapter, duration).await {
+                                    Ok(output) => {
+                                        for line in output.lines() {
+                                            writeln!(stdout, "{}", line).ok();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        writeln!(stdout, "{}{}", "Error: ".red(), e).ok();
+                                    }
+                                }
                             }
                             "connect" => {
                                 if state != State::Disconnected {

@@ -109,6 +109,10 @@ pub struct Cli {
     #[arg(short = 'S', long = "string", conflicts_with = "value", help_heading = "gratttool Enhanced Features")]
     pub string: Option<String>,
 
+    /// Scan for nearby BLE devices (duration in seconds, default 10)
+    #[arg(long = "scan", num_args = 0..=1, default_missing_value = "10", help_heading = "gratttool Enhanced Features")]
+    pub scan: Option<u64>,
+
     /// Change adapter BD_ADDR (MAC address), or "show" to display current address [requires root]
     #[arg(long = "bdaddr", help_heading = "gratttool Enhanced Features")]
     pub bdaddr: Option<String>,

@@ -22,7 +22,7 @@ The original `gatttool` was removed from BlueZ in 2017 but remains one of the mo
 - Uses the **modern BlueZ D-Bus API** instead of deprecated raw sockets
 - Is written in **safe Rust** with no C dependencies beyond libdbus
 - Supports both **non-interactive** (one-shot) and **interactive** (shell) modes
-- Adds enhanced features: **`--enumerate` table view**, **`--bdaddr` MAC spoofing**, **`--mtu` configuration**, **ASCII string writes**, and **hidden notification capture**
+- Adds enhanced features: **`--scan` device discovery**, **`--enumerate` table view**, **`--bdaddr` MAC spoofing**, **`--mtu` configuration**, **ASCII string writes**, and **hidden notification capture**
 
 ## Building
 
@@ -93,6 +93,7 @@ These flags are **not available in the original gatttool** — they are gratttoo
 
 | Flag | Long | Type | Description |
 |------|------|------|-------------|
+| | `--scan` | `[SECONDS]` | Scan for nearby BLE devices (default 10s) |
 | | `--enumerate` | bool | Enumerate device info, services, characteristics, and values in a table |
 | `-A` | `--ascii` | bool | Output read/notification values as ASCII (`.` for non-printable) |
 | `-X` | `--hex-ascii` | bool | Output read/notification values as hex AND ASCII side-by-side |
@@ -102,6 +103,47 @@ These flags are **not available in the original gatttool** — they are gratttoo
 | | `--bdaddr-transient` | bool | CSR only: transient mode (address lost on power cycle) |
 
 **Conflicts:** `-A` and `-X` are mutually exclusive. `-S` and `-n` are mutually exclusive.
+
+#### `--scan` (BLE device discovery)
+
+Scans for nearby BLE devices without needing to switch to `hcitool lescan` or `bluetoothctl`. Devices are printed live as they are discovered, followed by a color-coded summary table sorted by signal strength (RSSI).
+
+```bash
+# Scan for 10 seconds (default)
+gratttool --scan
+
+# Scan for 30 seconds
+gratttool --scan 30
+
+# Scan on a specific adapter
+gratttool -i hci1 --scan
+```
+
+Output:
+
+```
+LE Scan on hci0 [AA:BB:CC:DD:EE:FF] for 10s ...
+11:22:33:44:55:66 MyDevice RSSI: -45
+77:88:99:AA:BB:CC (unknown) RSSI: -72
+DD:EE:FF:00:11:22 BLE_CTF RSSI: -58
+
+┌ Scan Results (3 devices) ──────────────────────────────────────────────┐
+│ Address           │ Type   │ RSSI     │ Name                           │
+├───────────────────┼────────┼──────────┼────────────────────────────────┤
+│ 11:22:33:44:55:66 │ public │ -45 dBm  │ MyDevice                       │
+│ DD:EE:FF:00:11:22 │ random │ -58 dBm  │ BLE_CTF                        │
+│ 77:88:99:AA:BB:CC │ random │ -72 dBm  │ (unknown)                      │
+└───────────────────┴────────┴──────────┴────────────────────────────────┘
+```
+
+RSSI values are color-coded: green for strong signal (>= -50 dBm), yellow for medium (>= -70), orange for weak (>= -85), and red for very weak.
+
+Also available as the `scan` command in interactive mode:
+
+```
+[                 ][LE]> scan
+[                 ][LE]> scan 5
+```
 
 #### `-A` / `--ascii` (read output as ASCII)
 
@@ -413,6 +455,7 @@ The prompt shows the connection state and transport type:
 |---------|-----------|-------------|
 | `help` | | Show all available commands |
 | `exit` / `quit` | | Disconnect and exit |
+| `scan` | `[duration]` | Scan for nearby BLE devices (default 10s) |
 | `connect` | `[address [address_type]]` | Connect to a device |
 | `disconnect` | | Disconnect from current device |
 | `primary` | `[UUID]` | Discover primary services |
@@ -487,8 +530,9 @@ src/
   handle_table.rs   ATT handle-to-bluer-object mapping table
   gatt.rs           GATT operations (discover, read, write, notify)
   interactive.rs    Interactive readline shell with async notifications
-  output.rs         Output formatting (gatttool formats + Catppuccin enumerate table)
+  output.rs         Output formatting (gatttool formats + Catppuccin enumerate/scan tables)
   error.rs          ATT error codes and application error types
+  scan.rs           BLE device scanning via bluer discovery API
   bdaddr.rs         BD_ADDR change via vendor-specific HCI commands
 ```
 

@@ -7,6 +7,7 @@ mod handle_table;
 mod interactive;
 mod monitor;
 mod output;
+mod scan;
 
 use clap::Parser;
 use std::process;
@@ -74,6 +75,15 @@ async fn main() {
                 eprintln!("{}", e);
                 process::exit(1);
             }
+        }
+        return;
+    }
+
+    // Handle --scan (operates on adapter, doesn't need a device)
+    if let Some(duration) = args.scan {
+        if let Err(e) = scan::scan(&args.adapter, duration).await {
+            eprintln!("{}", e);
+            process::exit(1);
         }
         return;
     }
