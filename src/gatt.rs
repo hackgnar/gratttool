@@ -9,6 +9,7 @@ use bluer::gatt::WriteOp;
 use futures::StreamExt;
 use std::io::Write;
 use std::pin::Pin;
+use std::time::Duration;
 
 /// Discover all primary services, printing in gatttool non-interactive format
 pub async fn discover_primary(
@@ -410,9 +411,14 @@ pub async fn enumerate(conn: &Connection) -> Result<(), GrattError> {
                     let data = if (properties.0 & CharProps::READ) != 0
                         && (properties.0 & CharProps::INDICATE) == 0
                     {
-                        match characteristic.read().await {
-                            Ok(d) => Some(d),
-                            Err(_) => None,
+                        match tokio::time::timeout(
+                            Duration::from_secs(3),
+                            characteristic.read(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(d)) => Some(d),
+                            _ => None,
                         }
                     } else {
                         None

@@ -367,7 +367,7 @@ This only affects `--listen`. All other operations (read, write, discovery) work
 
 ### Enumerate Device (Table View)
 
-Inspired by [bleah](https://github.com/hackgnar/bleah)'s `-e` flag, `--enumerate` connects to a device and displays a full overview of all services, characteristics, descriptors, and readable values in a color-coded table view using the [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) color palette.
+Inspired by bleah and bettercap, `--enumerate` connects to a device and displays a full overview of all services, characteristics, descriptors, and readable values in a color-coded table view using the [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) color palette.
 
 ```bash
 gratttool -b AA:BB:CC:DD:EE:FF --enumerate
