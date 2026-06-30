@@ -24,7 +24,99 @@ The original `gatttool` was removed from BlueZ in 2017 but remains one of the mo
 - Supports both **non-interactive** (one-shot) and **interactive** (shell) modes
 - Adds enhanced features: **`--scan` device discovery**, **`--enumerate` table view**, **`--bdaddr` MAC spoofing**, **`--mtu` configuration**, **ASCII string writes**, and **hidden notification capture**
 
+## Install
+
+The easiest way to run gratttool is to download a prebuilt binary from the
+[latest release](https://github.com/hackgnar/gratttool/releases/latest) — no Rust
+toolchain or compiler required. (Prefer to build from source? See [Building](#building).)
+
+### 1. Install the runtime dependencies
+
+You only need the BlueZ stack and the **runtime** libdbus library (not the `-dev`
+build headers):
+
+```bash
+sudo apt install -y bluetooth bluez libdbus-1-3
+```
+
+### 2. Download the binary for your architecture
+
+Run `uname -m` and pick the matching build:
+
+| `uname -m` | Build | Typical hardware |
+|------------|-------|------------------|
+| `x86_64`   | `gratttool-linux-x86_64`  | Laptops, desktops, most VMs |
+| `aarch64`  | `gratttool-linux-aarch64` | Pi 3/4/5 (64-bit OS), Pi Zero 2 W, Apple-silicon Linux VMs |
+| `armv7l`   | `gratttool-linux-armv7`   | Pi 2/3/4 on a 32-bit OS |
+| `armv6l`   | `gratttool-linux-armv6`   | Pi 1, original Pi Zero / Zero W |
+
+> **Raspberry Pi Zero:** the *original* Zero / Zero W is ARMv6 → use `armv6`. The newer
+> Zero 2 W is ARMv8 → use `aarch64` (or `armv7` on a 32-bit OS). When unsure, the
+> `armv6` build runs on any 32-bit Pi.
+
+```bash
+# Replace <arch> with x86_64, aarch64, armv7, or armv6 from the table above:
+curl -fsSL -o gratttool \
+  https://github.com/hackgnar/gratttool/releases/latest/download/gratttool-linux-<arch>
+```
+
+### 3. Make it executable
+
+```bash
+chmod +x gratttool
+```
+
+### 4. Install it to your PATH
+
+```bash
+sudo mv gratttool /usr/local/bin/gratttool
+```
+
+### 5. Verify it runs
+
+```bash
+gratttool --help
+```
+
+You should see the usage summary:
+
+```
+BLE GATT tool (gatttool reimplementation)
+
+Usage: gratttool [OPTIONS]
+
+Options:
+  -i, --adapter <ADAPTER>      Specify local adapter interface [default: hci0]
+  -b, --device <DEVICE>        Specify remote Bluetooth address
+  -t, --addr-type <ADDR_TYPE>  Set LE address type. Default: public [default: public]
+  -I, --interactive            Use interactive mode
+      --primary                Primary Service Discovery
+      --characteristics        Characteristics Discovery
+      --char-read              Characteristics Value/Descriptor Read
+  -h, --help                   Print help
+
+gratttool Enhanced Features:
+      --enumerate         Enumerate all services, characteristics, and values in a table view
+  -A, --ascii             Output read/notification values as ASCII (. for non-printable)
+      --scan [<SCAN>]     Scan for nearby BLE devices (duration in seconds, default 10)
+...
+```
+
+(See [Usage](#usage) below for the complete flag reference.)
+
+BLE access usually needs elevated privileges — run with `sudo`, or grant the
+capabilities once so it works unprivileged:
+
+```bash
+sudo setcap 'cap_net_raw,cap_net_admin+eip' /usr/local/bin/gratttool
+```
+
+Make sure the Bluetooth service is running: `sudo systemctl enable --now bluetooth`.
+
 ## Building
+
+Prefer to compile from source (e.g. to hack on gratttool, or on a distro without a
+prebuilt binary)? You'll need:
 
 ### Prerequisites
 
