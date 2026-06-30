@@ -62,21 +62,25 @@ jobs:
           # multiarch ABI dir with armv7, so libdbus + strip are identical;
           # only the codegen differs. arm_arch asserts ARMv6 in verify below.
           #
-          # rustflags: this target's cross image uses a crosstool-NG toolchain
-          # (/x-tools/...) that is NOT multiarch-aware, so its linker does not
-          # search /usr/lib/arm-linux-gnueabihf for libdbus's transitive
-          # NEEDED libsystemd.so.0. -L is never used for transitive shlib deps;
-          # only -rpath-link is. Point it at the multiarch dir so libsystemd
-          # (a hard dep of libdbus-1-3, already installed there) resolves.
-          # Set ONLY on this target — armv7/aarch64 use the Debian multiarch
-          # gcc which finds it by default, so they stay untouched.
+          # rustflags: Debian's libdbus-1.so has an internal NEEDED on
+          # libsystemd.so.0, which is NOT present in this target's crosstool-NG
+          # cross sysroot (and isn't pulled in as a dep there). gratttool never
+          # calls libsystemd directly — only libdbus does, internally — so this
+          # symbol is resolved at runtime on the Pi, where a full systemd
+          # userland always provides libsystemd.so.0. --allow-shlib-undefined
+          # tells ld not to error on undefined symbols that originate inside a
+          # shared library (libdbus); it still fully checks gratttool's own
+          # symbols. Avoids installing libsystemd + its whole transitive tree
+          # into the build container. Set ONLY on this target — armv7/aarch64
+          # use the Debian multiarch gcc, which resolves it at link time, so
+          # they stay untouched.
           - artifact: gratttool-linux-armv6
             target: arm-unknown-linux-gnueabihf
             cross: true
             strip: arm-linux-gnueabihf-strip
             pkg_config_path: /usr/lib/arm-linux-gnueabihf/pkgconfig
             arm_arch: v6
-            rustflags: "-C link-arg=-Wl,-rpath-link,/usr/lib/arm-linux-gnueabihf"
+            rustflags: "-C link-arg=-Wl,--allow-shlib-undefined"
 
     steps:
       - uses: actions/checkout@v4
