@@ -1,10 +1,30 @@
 use std::collections::BTreeMap;
 
-use bluer::{Adapter, AdapterEvent, Address, AddressType, Session};
+use bluer::{Adapter, AdapterEvent, Address, AddressType, Device, Session};
 use futures::StreamExt;
 
 use crate::error::GrattError;
 use crate::output;
+
+/// Determine if a device is likely connectable based on advertising flags and service UUIDs.
+async fn infer_connectable(dev: &Device) -> Option<bool> {
+    // AD Flags bit 0 = LE Limited Discoverable, bit 1 = LE General Discoverable
+    // Devices advertising with discoverable flags are typically connectable.
+    if let Ok(Some(flags)) = dev.advertising_flags().await {
+        if let Some(&byte) = flags.first() {
+            if byte & 0x03 != 0 {
+                return Some(true);
+            }
+        }
+    }
+    // Devices advertising service UUIDs are typically GATT servers (connectable).
+    if let Ok(Some(uuids)) = dev.uuids().await {
+        if !uuids.is_empty() {
+            return Some(true);
+        }
+    }
+    None
+}
 
 /// Information about a discovered BLE device
 #[derive(Debug, Clone)]
@@ -13,6 +33,7 @@ pub struct ScannedDevice {
     pub addr_type: Option<AddressType>,
     pub name: Option<String>,
     pub rssi: Option<i16>,
+    pub connectable: Option<bool>,
 }
 
 /// Perform a BLE device scan for the given duration (seconds).
@@ -54,6 +75,7 @@ pub async fn scan(adapter_name: &str, duration_secs: u64) -> Result<Vec<ScannedD
                             let name = dev.name().await.ok().flatten();
                             let rssi = dev.rssi().await.ok().flatten();
                             let addr_type = dev.address_type().await.ok();
+                            let connectable = infer_connectable(&dev).await;
 
                             let display_name = name.as_deref().unwrap_or("(unknown)");
                             eprintln!("{} {} RSSI: {}",
@@ -67,6 +89,7 @@ pub async fn scan(adapter_name: &str, duration_secs: u64) -> Result<Vec<ScannedD
                                 addr_type,
                                 name,
                                 rssi,
+                                connectable,
                             });
                         }
                     }
@@ -103,12 +126,14 @@ async fn populate_known_devices(
                 let name = dev.name().await.ok().flatten();
                 let rssi = dev.rssi().await.ok().flatten();
                 let addr_type = dev.address_type().await.ok();
+                let connectable = infer_connectable(&dev).await;
 
                 devices.insert(addr, ScannedDevice {
                     address: addr,
                     addr_type,
                     name,
                     rssi,
+                    connectable,
                 });
             }
         }
@@ -150,6 +175,7 @@ pub async fn scan_interactive(adapter_name: &str, duration_secs: u64) -> Result<
                         let name = dev.name().await.ok().flatten();
                         let rssi = dev.rssi().await.ok().flatten();
                         let addr_type = dev.address_type().await.ok();
+                        let connectable = infer_connectable(&dev).await;
 
                         let display_name = name.as_deref().unwrap_or("(unknown)");
                         live_output.push_str(&format!(
@@ -164,6 +190,7 @@ pub async fn scan_interactive(adapter_name: &str, duration_secs: u64) -> Result<
                             addr_type,
                             name,
                             rssi,
+                            connectable,
                         });
                     }
                 }

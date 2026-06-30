@@ -371,22 +371,22 @@ pub fn render_enumerate_table(rows: &[EnumRow]) -> String {
 
     // Fixed columns: Handles, Service > Characteristics, Properties
     // These size to content. Data and ASCII get the remaining space.
-    let headers = ["Handles", "Service > Characteristics", "Properties", "Data", "ASCII"];
+    let headers = ["Handles", "Service > Characteristics", "Properties", "ASCII", "Data"];
     let ncols = 5;
 
     // Measure fixed column widths from content
     let mut w_handles = headers[0].len();
     let mut w_desc = headers[1].len();
     let mut w_props = headers[2].len();
-    let mut max_data = headers[3].len();
-    let mut max_ascii = headers[4].len();
+    let mut max_ascii = headers[3].len();
+    let mut max_data = headers[4].len();
 
     for row in rows {
         w_handles = w_handles.max(visible_len(&row.handles));
         w_desc = w_desc.max(visible_len(&row.description));
         w_props = w_props.max(visible_len(&row.properties));
-        max_data = max_data.max(row.data.len());
         max_ascii = max_ascii.max(row.ascii.len());
+        max_data = max_data.max(row.data.len());
     }
 
     // Calculate overhead: ncols borders + padding (2 per col) + 1 trailing border
@@ -394,15 +394,15 @@ pub fn render_enumerate_table(rows: &[EnumRow]) -> String {
     let overhead = ncols + 1 + ncols * 2; // 6 borders + 10 padding = 16
     let fixed_used = w_handles + w_desc + w_props + overhead;
 
-    // Remaining space for data + ascii
+    // Remaining space for ascii + data
     let remaining = tw.saturating_sub(fixed_used);
 
     // Split remaining: give ASCII ~1/4 (it's compact), Data ~3/4
     // But never less than header width, and never more than content needs
-    let w_ascii = max_ascii.min(remaining / 4).max(headers[4].len()).max(5);
-    let w_data = remaining.saturating_sub(w_ascii).max(headers[3].len()).max(8);
+    let w_ascii = max_ascii.min(remaining / 4).max(headers[3].len()).max(5);
+    let w_data = remaining.saturating_sub(w_ascii).max(headers[4].len()).max(8);
 
-    let widths = [w_handles, w_desc, w_props, w_data, w_ascii];
+    let widths = [w_handles, w_desc, w_props, w_ascii, w_data];
 
     let mut out = String::new();
     let b = ctp("─", SURFACE1);
@@ -463,9 +463,9 @@ pub fn render_enumerate_table(rows: &[EnumRow]) -> String {
 
         let c_props = colorize_props(&row.properties);
 
-        // Wrap data and ascii into lines that fit their column widths
-        let data_lines = wrap_plain_text(&row.data, w_data);
+        // Wrap ascii and data into lines that fit their column widths
         let ascii_lines = wrap_plain_text(&row.ascii, w_ascii);
+        let data_lines = wrap_plain_text(&row.data, w_data);
         let num_lines = data_lines.len().max(ascii_lines.len()).max(1);
 
         for line_idx in 0..num_lines {
@@ -507,20 +507,6 @@ pub fn render_enumerate_table(rows: &[EnumRow]) -> String {
             out.push(' ');
             out.push_str(&v.to_string());
 
-            // Data
-            out.push(' ');
-            let data_chunk = data_lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
-            let c_data = if !data_chunk.is_empty() {
-                ctp(data_chunk, FLAMINGO).to_string()
-            } else {
-                String::new()
-            };
-            let data_vlen = visible_len(&c_data);
-            out.push_str(&c_data);
-            out.push_str(&" ".repeat(w_data.saturating_sub(data_vlen)));
-            out.push(' ');
-            out.push_str(&v.to_string());
-
             // ASCII
             out.push(' ');
             let ascii_chunk = ascii_lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
@@ -532,6 +518,20 @@ pub fn render_enumerate_table(rows: &[EnumRow]) -> String {
             let ascii_vlen = visible_len(&c_ascii);
             out.push_str(&c_ascii);
             out.push_str(&" ".repeat(w_ascii.saturating_sub(ascii_vlen)));
+            out.push(' ');
+            out.push_str(&v.to_string());
+
+            // Data
+            out.push(' ');
+            let data_chunk = data_lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+            let c_data = if !data_chunk.is_empty() {
+                ctp(data_chunk, FLAMINGO).to_string()
+            } else {
+                String::new()
+            };
+            let data_vlen = visible_len(&c_data);
+            out.push_str(&c_data);
+            out.push_str(&" ".repeat(w_data.saturating_sub(data_vlen)));
             out.push(' ');
             out.push_str(&v.to_string());
 
@@ -622,7 +622,7 @@ pub fn enum_separator_row() -> EnumRow {
 /// Render a scan results table with Catppuccin-styled box-drawing
 pub fn render_scan_table(devices: &[crate::scan::ScannedDevice]) -> String {
     let tw = term_width();
-    let headers = ["Address", "Type", "RSSI", "Name"];
+    let headers = ["Address", "Type", "RSSI", "Conn", "Name"];
     let ncols = headers.len();
 
     // Measure column widths from content
@@ -633,15 +633,16 @@ pub fn render_scan_table(devices: &[crate::scan::ScannedDevice]) -> String {
         w[1] = w[1].max(type_str.len());
         let rssi_str = dev.rssi.map(|r| format!("{} dBm", r)).unwrap_or_else(|| "n/a".into());
         w[2] = w[2].max(rssi_str.len());
+        // w[3] = "Conn" column, fixed width from header is sufficient ("Yes"/"No"/"?")
         let name = dev.name.as_deref().unwrap_or("");
-        w[3] = w[3].max(name.len());
+        w[4] = w[4].max(name.len());
     }
 
     // Cap name column to fit terminal
     let overhead = ncols + 1 + ncols * 2; // borders + padding
-    let fixed = w[0] + w[1] + w[2] + overhead;
-    let max_name = tw.saturating_sub(fixed).max(headers[3].len()).max(8);
-    w[3] = w[3].min(max_name);
+    let fixed = w[0] + w[1] + w[2] + w[3] + overhead;
+    let max_name = tw.saturating_sub(fixed).max(headers[4].len()).max(8);
+    w[4] = w[4].min(max_name);
 
     let mut out = String::new();
     let b = ctp("─", SURFACE1);
@@ -693,15 +694,20 @@ pub fn render_scan_table(devices: &[crate::scan::ScannedDevice]) -> String {
         let addr_str = format!("{}", dev.address);
         let type_str = format_addr_type(dev.addr_type);
         let rssi_str = dev.rssi.map(|r| format!("{} dBm", r)).unwrap_or_else(|| "n/a".into());
+        let conn_str = match dev.connectable {
+            Some(true) => "Yes",
+            Some(false) => "No",
+            None => "?",
+        };
         let name = dev.name.as_deref().unwrap_or("");
         // Truncate name if too long
-        let name_display = if name.len() > w[3] {
-            &name[..w[3]]
+        let name_display = if name.len() > w[4] {
+            &name[..w[4]]
         } else {
             name
         };
 
-        let fields: Vec<String> = vec![addr_str, type_str, rssi_str, name_display.to_string()];
+        let fields: Vec<String> = vec![addr_str, type_str, rssi_str, conn_str.to_string(), name_display.to_string()];
 
         out.push_str(&v.to_string());
         for (i, field) in fields.iter().enumerate() {
@@ -710,7 +716,12 @@ pub fn render_scan_table(devices: &[crate::scan::ScannedDevice]) -> String {
                 0 => ctp_bold(field, ROSEWATER).to_string(),
                 1 => ctp(field, LAVENDER).to_string(),
                 2 => colorize_rssi(field, dev.rssi),
-                3 => {
+                3 => match dev.connectable {
+                    Some(true) => ctp_bold(field, GREEN).to_string(),
+                    Some(false) => ctp(field, RED).to_string(),
+                    None => ctp(field, OVERLAY0).to_string(),
+                },
+                4 => {
                     if field.is_empty() {
                         ctp("(unknown)", OVERLAY0).to_string()
                     } else {
