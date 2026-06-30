@@ -34,3 +34,18 @@ pre-build = [
     "apt-get update",
     "apt-get install --assume-yes --no-install-recommends libdbus-1-dev:$CROSS_DEB_ARCH pkg-config",
 ]
+
+# ARMv6 hard-float (Pi 1, original Pi Zero / Zero W). $CROSS_DEB_ARCH is armhf
+# here too — the armhf package set is keyed by the arm-linux-gnueabihf *ABI*,
+# not the ISA, so this installs the same libdbus into the same multiarch dir
+# as the armv7 build and links the same way. What differs is rustc's codegen:
+# the bare `arm-` target emits ARMv6, which is what makes the output run on the
+# older boards. (The Debian libdbus we link against is itself ARMv7-built, but
+# only its SONAME/symbols matter at link time — at runtime the Pi loads its own
+# ARMv6-safe libdbus by SONAME.)
+[target.arm-unknown-linux-gnueabihf]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update",
+    "apt-get install --assume-yes --no-install-recommends libdbus-1-dev:$CROSS_DEB_ARCH pkg-config",
+]

@@ -43,12 +43,30 @@ jobs:
             strip: aarch64-linux-gnu-strip
             pkg_config_path: /usr/lib/aarch64-linux-gnu/pkgconfig
 
-          # 32-bit Raspberry Pi OS.
+          # 32-bit Raspberry Pi OS on ARMv7 boards (Pi 2/3/4, Zero 2 W runs
+          # 64-bit so use aarch64 there instead). arm_arch asserts the ELF is
+          # actually ARMv7 in the verify step below.
           - artifact: gratttool-linux-armv7
             target: armv7-unknown-linux-gnueabihf
             cross: true
             strip: arm-linux-gnueabihf-strip
             pkg_config_path: /usr/lib/arm-linux-gnueabihf/pkgconfig
+            arm_arch: v7
+
+          # ARMv6 hard-float: the ONLY build that runs on the original ARMv6
+          # boards — Pi 1 and the original Pi Zero / Zero W. The armv7 build
+          # SIGILLs on these. The Rust target `arm-unknown-linux-gnueabihf`
+          # (note: bare `arm-`, not `armv7-`) emits ARMv6 + VFPv2 codegen by
+          # default; there are no RUSTFLAGS/target-cpu overrides in this repo
+          # that would force a newer ISA. armhf shares the arm-linux-gnueabihf
+          # multiarch ABI dir with armv7, so libdbus + strip are identical;
+          # only the codegen differs. arm_arch asserts ARMv6 in verify below.
+          - artifact: gratttool-linux-armv6
+            target: arm-unknown-linux-gnueabihf
+            cross: true
+            strip: arm-linux-gnueabihf-strip
+            pkg_config_path: /usr/lib/arm-linux-gnueabihf/pkgconfig
+            arm_arch: v6
 
     steps:
       - uses: actions/checkout@v4
@@ -67,8 +85,9 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
 
       # --- Cross: install the foreign-arch strip binaries on the runner so we
-      # can strip the aarch64/armv7 outputs after the build (the actual libdbus
-      # cross-link happens inside the cross container, see Cross.toml).
+      # can strip the aarch64/armv7/armv6 outputs after the build (the actual
+      # libdbus cross-link happens inside the cross container, see Cross.toml).
+      # armv6 and armv7 share the arm-linux-gnueabihf-strip binary.
       - name: Install cross strip tools
         if: ${{ matrix.cross }}
         run: |
@@ -110,6 +129,24 @@ jobs:
             exit 1
           fi
           echo "OK: libdbus-1 is linked."
+
+          # For the arm hard-float targets, assert the actual ISA baked into
+          # the ELF ARM attributes. armv6 and armv7 share the armhf ABI and the
+          # same libdbus/strip, so the ONLY thing that makes the armv6 build run
+          # on a Pi 1 / Zero is Tag_CPU_arch being v6. If a stray target-cpu/
+          # RUSTFLAG ever forces v7 here, this fails the build instead of
+          # shipping a binary that SIGILLs on ARMv6 hardware.
+          if [ -n "${{ matrix.arm_arch }}" ]; then
+            CPU_ARCH=$(readelf -A "$BIN" | sed -n 's/.*Tag_CPU_arch: //p' | head -n1)
+            echo "ELF Tag_CPU_arch: ${CPU_ARCH} (expected ${{ matrix.arm_arch }})"
+            if [ "$CPU_ARCH" != "${{ matrix.arm_arch }}" ]; then
+              echo "ERROR: ${{ matrix.target }} produced Tag_CPU_arch '$CPU_ARCH', expected '${{ matrix.arm_arch }}'."
+              echo "An ARMv6 target must NOT emit v7 codegen or it will SIGILL on Pi 1 / Zero."
+              readelf -A "$BIN" || true
+              exit 1
+            fi
+            echo "OK: ELF ISA is ${{ matrix.arm_arch }} as expected."
+          fi
 
       - name: Strip binary
         run: |
