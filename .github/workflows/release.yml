@@ -1,0 +1,151 @@
+name: release
+
+# Build prebuilt, stripped gratttool binaries for the common workshop targets
+# and attach them to a GitHub Release so attendees can download-and-run without
+# installing Rust or any build toolchain.
+
+on:
+  push:
+    tags:
+      - 'v*'          # e.g. v1.0.0
+  workflow_dispatch:  # manual trigger for testing (builds + uploads CI
+                      # artifacts, but only publishes a Release on a v* tag)
+
+permissions:
+  contents: write     # required to create/update the GitHub Release
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    # ubuntu-22.04 is the OLDEST generally-available GitHub-hosted runner
+    # (glibc 2.35); ubuntu-20.04 (glibc 2.31) was retired in 2025. The native
+    # binary is dynamically linked against the runner's glibc, so building on
+    # the oldest runner keeps it loadable on older student distros. A binary
+    # built against a newer glibc dies at startup with
+    # "version `GLIBC_2.xx' not found" on machines with an older libc.
+    # (The aarch64/armv7 binaries are built inside cross's own older-glibc
+    # images, so they get an even lower baseline regardless of this runner.)
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Primary: most laptops and VMs. Native build on the runner.
+          - artifact: gratttool-linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            cross: false
+            strip: strip
+
+          # 64-bit Raspberry Pi OS, Apple Silicon Linux VMs.
+          - artifact: gratttool-linux-aarch64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            strip: aarch64-linux-gnu-strip
+            pkg_config_path: /usr/lib/aarch64-linux-gnu/pkgconfig
+
+          # 32-bit Raspberry Pi OS.
+          - artifact: gratttool-linux-armv7
+            target: armv7-unknown-linux-gnueabihf
+            cross: true
+            strip: arm-linux-gnueabihf-strip
+            pkg_config_path: /usr/lib/arm-linux-gnueabihf/pkgconfig
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # --- Native (x86_64): libdbus dev headers must be present so the
+      # libdbus-sys build script's pkg-config call resolves against the host.
+      - name: Install native build dependencies
+        if: ${{ !matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      # --- Cross: install the foreign-arch strip binaries on the runner so we
+      # can strip the aarch64/armv7 outputs after the build (the actual libdbus
+      # cross-link happens inside the cross container, see Cross.toml).
+      - name: Install cross strip tools
+        if: ${{ matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-aarch64-linux-gnu binutils-arm-linux-gnueabihf
+
+      - name: Install cross
+        if: ${{ matrix.cross }}
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # PKG_CONFIG_* tell the in-container pkg-config to resolve the foreign
+      # libdbus: allow cross probing, point at the target arch's .pc dir, and
+      # keep the sysroot at the container root where the :arm64/:armhf package
+      # was installed. These names are passed through to the container by the
+      # [build.env] passthrough list in Cross.toml.
+      - name: Build (cross)
+        if: ${{ matrix.cross }}
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_SYSROOT_DIR: /
+          PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      # Don't assume the cross link worked — prove libdbus actually got linked.
+      # A missing/misconfigured pkg-config would otherwise produce a binary
+      # that fails only at runtime on an attendee's Pi.
+      - name: Verify binary architecture and libdbus link
+        run: |
+          BIN="target/${{ matrix.target }}/release/gratttool"
+          file "$BIN"
+          if ! readelf -d "$BIN" | grep -qi 'libdbus-1'; then
+            echo "ERROR: libdbus-1 is not in the binary's dynamic dependencies."
+            echo "The cross pkg-config setup did not link libdbus — see Cross.toml."
+            readelf -d "$BIN" || true
+            exit 1
+          fi
+          echo "OK: libdbus-1 is linked."
+
+      - name: Strip binary
+        run: |
+          ${{ matrix.strip }} "target/${{ matrix.target }}/release/gratttool"
+          cp "target/${{ matrix.target }}/release/gratttool" "${{ matrix.artifact }}"
+          ls -lh "${{ matrix.artifact }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-22.04
+    # Only publish a Release for an actual tag push; a manual workflow_dispatch
+    # run still builds + uploads CI artifacts above for testing, but skips this.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true   # flatten every artifact into dist/
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true   # auto-generate notes from commits/PRs
+          fail_on_unmatched_files: true
