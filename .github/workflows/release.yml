@@ -61,12 +61,22 @@ jobs:
           # that would force a newer ISA. armhf shares the arm-linux-gnueabihf
           # multiarch ABI dir with armv7, so libdbus + strip are identical;
           # only the codegen differs. arm_arch asserts ARMv6 in verify below.
+          #
+          # rustflags: this target's cross image uses a crosstool-NG toolchain
+          # (/x-tools/...) that is NOT multiarch-aware, so its linker does not
+          # search /usr/lib/arm-linux-gnueabihf for libdbus's transitive
+          # NEEDED libsystemd.so.0. -L is never used for transitive shlib deps;
+          # only -rpath-link is. Point it at the multiarch dir so libsystemd
+          # (a hard dep of libdbus-1-3, already installed there) resolves.
+          # Set ONLY on this target — armv7/aarch64 use the Debian multiarch
+          # gcc which finds it by default, so they stay untouched.
           - artifact: gratttool-linux-armv6
             target: arm-unknown-linux-gnueabihf
             cross: true
             strip: arm-linux-gnueabihf-strip
             pkg_config_path: /usr/lib/arm-linux-gnueabihf/pkgconfig
             arm_arch: v6
+            rustflags: "-C link-arg=-Wl,-rpath-link,/usr/lib/arm-linux-gnueabihf"
 
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +123,10 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: "1"
           PKG_CONFIG_SYSROOT_DIR: /
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
+          # Empty for targets that don't set matrix.rustflags (no-op); only the
+          # armv6 target sets it, to add -rpath-link for libdbus's transitive
+          # libsystemd. Passed into the cross container via Cross.toml passthrough.
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: cross build --release --locked --target ${{ matrix.target }}
 
       # Don't assume the cross link worked — prove libdbus actually got linked.
